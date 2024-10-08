@@ -1,14 +1,16 @@
 const express = require('express');
 const socket = require('socket.io');
 const mongoose = require('mongoose');
+
 const app = express();
+const port = process.env.PORT || 5000;
 
 // Conectar a MongoDB
 mongoose.connect('mongodb://localhost/chatDB', { useNewUrlParser: true, useUnifiedTopology: true })
     .then(() => console.log('Conectado a la base de datos MongoDB'))
-    .catch(err => console.log('Error de conexión a MongoDB:', err));
+    .catch(err => console.error('Error de conexión a MongoDB:', err));
 
-// Esquema del usuario
+// Esquema de usuario
 const UsuarioSchema = new mongoose.Schema({
     usuario: { type: String, unique: true },
     contraseña: String
@@ -16,7 +18,7 @@ const UsuarioSchema = new mongoose.Schema({
 
 const Usuario = mongoose.model('Usuario', UsuarioSchema);
 
-// Esquema del mensaje
+// Esquema de mensaje
 const MensajeSchema = new mongoose.Schema({
     usuario: String,
     mensaje: String,
@@ -25,60 +27,55 @@ const MensajeSchema = new mongoose.Schema({
 
 const Mensaje = mongoose.model('Mensaje', MensajeSchema);
 
-// Servidor Express
-const server = app.listen(5000, '0.0.0.0', function() {
-    console.log("Servidor escuchando en puerto 5000...");
+// Iniciar servidor
+const server = app.listen(port, '0.0.0.0', () => {
+    console.log(`Servidor escuchando en puerto ${port}...`);
 });
 
-// Servir archivos estáticos
 app.use(express.static('public'));
 
-// Inicializar socket.io
+// Configurar socket.io
 const io = socket(server);
 let usuariosEnLinea = [];
 
-// Conexión de socket
-io.on('connection', function(socket) {
+// Manejar conexión de sockets
+io.on('connection', socket => {
     console.log('Nueva conexión: ' + socket.id);
 
     // Cargar mensajes existentes desde MongoDB
-    Mensaje.find().sort('fecha').then(mensajes => {
-        socket.emit('cargarMensajes', mensajes); // Enviar los mensajes al cliente
-    }).catch(err => {
-        console.log('Error al cargar los mensajes:', err);
-    });
+    Mensaje.find().sort('fecha')
+        .then(mensajes => socket.emit('cargarMensajes', mensajes))
+        .catch(err => console.error('Error al cargar los mensajes:', err));
 
-    // Recibir un nuevo mensaje
-    socket.on('chat', function(data) {
+    // Recibir nuevo mensaje de chat
+    socket.on('chat', data => {
         const nuevoMensaje = new Mensaje({
             usuario: data.usuario,
             mensaje: data.mensaje
         });
 
-        nuevoMensaje.save().then(() => {
-            io.sockets.emit('chat', data); // Emitir el mensaje a todos
-        }).catch(err => {
-            console.log('Error al guardar el mensaje:', err); // Manejar errores al guardar
-        });
+        nuevoMensaje.save()
+            .then(() => io.sockets.emit('chat', data))
+            .catch(err => console.error('Error al guardar el mensaje:', err));
     });
 
     // Registrar nuevo usuario
-    socket.on('registrarUsuario', function(data) {
+    socket.on('registrarUsuario', data => {
         const nuevoUsuario = new Usuario({
             usuario: data.usuario,
             contraseña: data.contraseña
         });
 
-        nuevoUsuario.save().then(() => {
-            socket.emit('respuestaValidacion', { validado: true, usuario: data.usuario });
-        }).catch(err => {
-            console.log('Error al registrar el usuario:', err);
-            socket.emit('respuestaValidacion', { validado: false });
-        });
+        nuevoUsuario.save()
+            .then(() => socket.emit('respuestaValidacion', { validado: true, usuario: data.usuario }))
+            .catch(err => {
+                console.error('Error al registrar el usuario:', err);
+                socket.emit('respuestaValidacion', { validado: false });
+            });
     });
 
-    // Validar usuario al iniciar sesión
-    socket.on('validarUsuario', function(data) {
+    // Validar usuario en inicio de sesión
+    socket.on('validarUsuario', data => {
         Usuario.findOne({ usuario: data.usuario, contraseña: data.contraseña })
             .then(usuario => {
                 if (usuario) {
@@ -88,31 +85,31 @@ io.on('connection', function(socket) {
                 }
             })
             .catch(err => {
-                console.log('Error al validar usuario:', err);
+                console.error('Error al validar usuario:', err);
                 socket.emit('respuestaValidacion', { validado: false });
             });
     });
 
-    // Añadir nuevo usuario en línea
-    socket.on('nuevoUsuario', function(nombreUsuario) {
+    // Nuevo usuario en línea
+    socket.on('nuevoUsuario', nombreUsuario => {
         if (!usuariosEnLinea.includes(nombreUsuario)) {
             usuariosEnLinea.push(nombreUsuario);
-            io.sockets.emit('usuariosEnLinea', usuariosEnLinea); // Emitir lista de usuarios en línea
+            io.sockets.emit('usuariosEnLinea', usuariosEnLinea);
+            socket.username = nombreUsuario; // Asignar el nombre de usuario al socket
         }
-        socket.username = nombreUsuario;
     });
 
-    // Mostrar que un usuario está escribiendo
-    socket.on('typing', function(data) {
+    // Usuario está escribiendo
+    socket.on('typing', data => {
         socket.broadcast.emit('typing', data);
     });
 
-    // Desconexión de usuario
-    socket.on('disconnect', function() {
+    // Desconectar usuario
+    socket.on('disconnect', () => {
         if (socket.username) {
             usuariosEnLinea = usuariosEnLinea.filter(usuario => usuario !== socket.username);
-            io.sockets.emit('usuariosEnLinea', usuariosEnLinea); // Actualizar lista de usuarios en línea
+            io.sockets.emit('usuariosEnLinea', usuariosEnLinea);
         }
-        console.log('Usuario desconectado: ' + socket.id);
+        console.log(`Usuario desconectado: ${socket.id}`);
     });
 });
